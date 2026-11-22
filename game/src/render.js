@@ -1,415 +1,534 @@
-// The Meridian Vault — the renderer: one canvas, one frame that must read at a
-// glance. The cover shows the whole heist in a single frame: the room, the
-// thief crossing it, guards with their cones, cameras with their beams, the
-// glowing loot and the alarm meter, all at once.
-import { VIEW, PALETTE, PLAYER, GUARD, CAMERA } from './config.js';
-import { PEDESTAL, EXIT, WALLS, CASES, STATUES, ROPES } from './world.js';
+// Drawing only: the world's state and the current screen in, pixels out. The 1280x860
+// playfield is scaled to fit the window and centred, the margin filled with the backdrop
+// colour. The hall is a midnight-blue marble floor with a crimson carpet runner, glass cases
+// and bronze statues for cover; the thief pops against the dark floor in a pool of gold
+// light with a thick gold rim, guards sweep amber cones, cameras sweep red beams, and the
+// golden watch glows on its pedestal. Text that holds a number is rebuilt only when the
+// number changes, so a frame allocates nothing.
+import {
+  ALARM,
+  CAMERA,
+  CARPET,
+  COVER_CIRCLES,
+  COVER_RECTS,
+  EXIT,
+  FIELD,
+  FONT,
+  GUARD,
+  LIVES,
+  PALETTE,
+  PEDESTAL,
+  THIEF,
+  TOOLS,
+  WALL,
+} from './config.js';
 
-const TITLE_FONT = 'bold 44px Georgia, serif';
-const SUBTITLE_FONT = 'bold 18px Georgia, serif';
-const HUD_FONT = 'bold 15px "Courier New", monospace';
-const HUD_SMALL_FONT = '13px "Courier New", monospace';
-const LABEL_FONT = 'bold 12px "Courier New", monospace';
+export const SCREEN_TITLE = 'title';
+export const SCREEN_PLAY = 'play';
+export const SCREEN_PAUSED = 'paused';
+export const SCREEN_OVER = 'over';
 
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+/** Gold veins in the marble floor: fixed segments, so the floor never changes between runs. */
+const VEINS = [
+  [120, 90, 300, 210],
+  [520, 140, 700, 60],
+  [900, 100, 1080, 240],
+  [180, 480, 380, 620],
+  [760, 500, 980, 660],
+  [1080, 620, 1220, 760],
+  [420, 700, 560, 820],
+  [980, 420, 1120, 520],
+];
+
+function cachedLabel(prefix) {
+  let value = -1;
+  let text = '';
+  return function label(next) {
+    if (next !== value) {
+      value = next;
+      text = prefix + next;
+    }
+    return text;
+  };
 }
 
-// A translucent wedge: a guard's vision cone or a camera's beam.
-function drawWedge(ctx, x, y, angle, range, halfAngle, fill) {
-  const gradient = ctx.createRadialGradient(x, y, 8, x, y, range);
-  gradient.addColorStop(0, fill);
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.arc(x, y, range, angle - halfAngle, angle + halfAngle);
-  ctx.closePath();
-  ctx.fill();
+function formatTime(seconds) {
+  const total = Math.floor(seconds);
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return `${minutes}:${rest < 10 ? '0' : ''}${rest}`;
 }
 
-function drawFloor(ctx) {
-  ctx.fillStyle = PALETTE.floor;
-  ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-  const tile = 64;
-  for (let ty = 0; ty < VIEW.height / tile; ty += 1) {
-    for (let tx = 0; tx < VIEW.width / tile; tx += 1) {
-      if ((tx + ty) % 2 === 0) continue;
-      ctx.fillStyle = (tx + ty) % 4 === 1 ? PALETTE.floorTile : PALETTE.floorTileDark;
-      ctx.fillRect(tx * tile, ty * tile, tile, tile);
+export function createRenderer(canvas) {
+  const context = canvas.getContext('2d');
+  const view = { scale: 1, x: 0, y: 0 };
+  const scoreLabel = cachedLabel('SCORE ');
+  const timeLabel = cachedLabel('TIME ');
+  const finalLabel = cachedLabel('Score ');
+  const bestLabel = cachedLabel('Best ');
+
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.round(window.innerWidth * ratio);
+    const height = Math.round(window.innerHeight * ratio);
+    canvas.width = width;
+    canvas.height = height;
+    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
+    view.x = (width - FIELD.width * view.scale) / 2;
+    view.y = (height - FIELD.height * view.scale) / 2;
+  }
+
+  const fonts = new Map();
+  function font(size, bold) {
+    const key = `${bold ? '700 ' : ''}${size}`;
+    if (!fonts.has(key)) fonts.set(key, `${bold ? '700 ' : ''}${size}px ${FONT}`);
+    return fonts.get(key);
+  }
+
+  function text(value, x, y, size, color, align, bold) {
+    context.font = font(size, bold);
+    context.fillStyle = color;
+    context.textAlign = align;
+    context.textBaseline = 'alphabetic';
+    context.fillText(value, x, y);
+  }
+
+  function drawFloor() {
+    context.fillStyle = PALETTE.floor;
+    context.fillRect(0, 0, FIELD.width, FIELD.height);
+    // Marble slabs.
+    context.strokeStyle = PALETTE.slab;
+    context.lineWidth = 2;
+    for (let x = 160; x < FIELD.width; x += 160) {
+      context.beginPath();
+      context.moveTo(x, WALL);
+      context.lineTo(x, FIELD.height - WALL);
+      context.stroke();
+    }
+    for (let y = 160; y < FIELD.height; y += 160) {
+      context.beginPath();
+      context.moveTo(WALL, y);
+      context.lineTo(FIELD.width - WALL, y);
+      context.stroke();
+    }
+    // Gold veins.
+    context.strokeStyle = 'rgba(232, 182, 76, 0.16)';
+    context.lineWidth = 1.5;
+    for (let index = 0; index < VEINS.length; index += 1) {
+      const vein = VEINS[index];
+      context.beginPath();
+      context.moveTo(vein[0], vein[1]);
+      context.lineTo(vein[2], vein[3]);
+      context.stroke();
+    }
+    // The crimson carpet runner down the middle.
+    context.fillStyle = PALETTE.carpet;
+    context.fillRect(CARPET.x, CARPET.y, CARPET.width, CARPET.height);
+    context.strokeStyle = PALETTE.carpetEdge;
+    context.lineWidth = 3;
+    context.beginPath();
+    context.moveTo(CARPET.x, CARPET.y);
+    context.lineTo(CARPET.x, CARPET.y + CARPET.height);
+    context.moveTo(CARPET.x + CARPET.width, CARPET.y);
+    context.lineTo(CARPET.x + CARPET.width, CARPET.y + CARPET.height);
+    context.stroke();
+    context.fillStyle = 'rgba(201, 162, 39, 0.45)';
+    for (let y = CARPET.y + 40; y < CARPET.y + CARPET.height; y += 80) {
+      context.beginPath();
+      context.moveTo(640, y - 8);
+      context.lineTo(648, y);
+      context.lineTo(640, y + 8);
+      context.lineTo(632, y);
+      context.closePath();
+      context.fill();
+    }
+    // Walls: a dark band with a gold hairline, and the doorway at the bottom centre.
+    context.fillStyle = PALETTE.backdrop;
+    context.fillRect(0, 0, FIELD.width, WALL);
+    context.fillRect(0, FIELD.height - WALL, FIELD.width, WALL);
+    context.fillRect(0, 0, WALL, FIELD.height);
+    context.fillRect(FIELD.width - WALL, 0, WALL, FIELD.height);
+    // Doorway gap in the bottom wall.
+    context.fillStyle = '#05060c';
+    context.fillRect(EXIT.x, FIELD.height - WALL, EXIT.width, WALL);
+    context.strokeStyle = PALETTE.gold;
+    context.lineWidth = 2;
+    context.strokeRect(1, 1, FIELD.width - 2, FIELD.height - 2);
+  }
+
+  function drawCover() {
+    for (let index = 0; index < COVER_RECTS.length; index += 1) {
+      const rect = COVER_RECTS[index];
+      if (rect.width === 34) {
+        // A marble column.
+        context.fillStyle = PALETTE.marble;
+        context.fillRect(rect.x, rect.y, rect.width, rect.height);
+        context.strokeStyle = PALETTE.gold;
+        context.lineWidth = 2;
+        context.strokeRect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6);
+      } else {
+        // A glass display case: dark glass, bright rim, glints of the pieces inside.
+        context.fillStyle = PALETTE.caseGlass;
+        context.fillRect(rect.x, rect.y, rect.width, rect.height);
+        context.strokeStyle = PALETTE.caseRim;
+        context.lineWidth = 2;
+        context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+        context.fillStyle = PALETTE.goldBright;
+        for (let dot = 0; dot < 3; dot += 1) {
+          context.beginPath();
+          context.arc(rect.x + 50 + dot * 75, rect.y + rect.height / 2, 4, 0, Math.PI * 2);
+          context.fill();
+        }
+      }
+    }
+    for (let index = 0; index < COVER_CIRCLES.length; index += 1) {
+      const circle = COVER_CIRCLES[index];
+      context.fillStyle = PALETTE.statue;
+      context.beginPath();
+      context.arc(circle.x, circle.y, circle.radius, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = PALETTE.statueHi;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.arc(circle.x, circle.y, circle.radius - 5, -2.4, -0.6);
+      context.stroke();
+      context.strokeStyle = PALETTE.gold;
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.arc(circle.x, circle.y, circle.radius + 3, 0, Math.PI * 2);
+      context.stroke();
     }
   }
-  // A brass inlay border around the gallery floor.
-  ctx.strokeStyle = 'rgba(201, 162, 39, 0.35)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(44, 44, VIEW.width - 88, VIEW.height - 88);
-}
 
-function drawWalls(ctx, world) {
-  for (const wall of WALLS) {
-    ctx.fillStyle = PALETTE.wall;
-    ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+  function drawPedestal(state) {
+    // A white marble column with gold trim.
+    context.fillStyle = PALETTE.marble;
+    context.beginPath();
+    context.arc(PEDESTAL.x, PEDESTAL.y, PEDESTAL.radius, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = PALETTE.gold;
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(PEDESTAL.x, PEDESTAL.y, PEDESTAL.radius - 6, 0, Math.PI * 2);
+    context.stroke();
+    if (!state.lootSecured) {
+      // The Gilded Hour: a golden pocket watch, glowing, with slow sparkles.
+      const glow = context.createRadialGradient(
+        PEDESTAL.x, PEDESTAL.y, 4, PEDESTAL.x, PEDESTAL.y, 74,
+      );
+      glow.addColorStop(0, 'rgba(255, 217, 122, 0.55)');
+      glow.addColorStop(1, 'rgba(255, 217, 122, 0)');
+      context.fillStyle = glow;
+      context.beginPath();
+      context.arc(PEDESTAL.x, PEDESTAL.y, 74, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = PALETTE.gold;
+      context.beginPath();
+      context.arc(PEDESTAL.x, PEDESTAL.y, 17, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = PALETTE.goldBright;
+      context.beginPath();
+      context.arc(PEDESTAL.x, PEDESTAL.y, 11, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = '#7a5a17';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(PEDESTAL.x, PEDESTAL.y);
+      context.lineTo(PEDESTAL.x + 7, PEDESTAL.y - 5);
+      context.moveTo(PEDESTAL.x, PEDESTAL.y);
+      context.lineTo(PEDESTAL.x - 3, PEDESTAL.y - 8);
+      context.stroke();
+      for (let spark = 0; spark < 4; spark += 1) {
+        const angle = state.elapsed * 0.7 + spark * (Math.PI / 2);
+        const radius = 30 + 8 * Math.sin(state.elapsed * 1.3 + spark * 2);
+        const sx = PEDESTAL.x + Math.cos(angle) * radius;
+        const sy = PEDESTAL.y + Math.sin(angle) * radius;
+        context.fillStyle = 'rgba(255, 217, 122, 0.9)';
+        context.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+      }
+      text('★ THE GILDED HOUR ★', PEDESTAL.x, PEDESTAL.y - 58, 20, PALETTE.goldBright, 'center', true);
+    } else {
+      text('— EMPTY —', PEDESTAL.x, PEDESTAL.y - 52, 16, PALETTE.muted, 'center', true);
+    }
   }
-  ctx.fillStyle = PALETTE.wallTop;
-  ctx.fillRect(0, 0, VIEW.width, 4);
-  ctx.fillRect(0, 0, 4, VIEW.height);
-  // The exit door, cut into the bottom wall: green and open once the loot is
-  // taken, red and locked before that.
-  const doorW = 110;
-  const dx = EXIT.x - doorW / 2;
-  ctx.fillStyle = world.lootTaken ? PALETTE.exit : '#3a1512';
-  ctx.fillRect(dx, VIEW.height - 28, doorW, 28);
-  ctx.strokeStyle = world.lootTaken ? PALETTE.exitGlow : '#a33327';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(dx, VIEW.height - 28, doorW, 28);
-  ctx.fillStyle = world.lootTaken ? PALETTE.exitGlow : '#d08a7a';
-  ctx.font = LABEL_FONT;
-  ctx.textAlign = 'center';
-  ctx.fillText(world.lootTaken ? 'EXIT — GO!' : 'EXIT · LOCKED', EXIT.x, VIEW.height - 10);
-}
 
-function drawCases(ctx) {
-  for (const c of CASES) {
-    ctx.fillStyle = PALETTE.caseFrame;
-    ctx.fillRect(c.x - 4, c.y - 4, c.w + 8, c.h + 8);
-    ctx.fillStyle = PALETTE.caseTop;
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.fillStyle = PALETTE.caseGlass;
-    ctx.fillRect(c.x + 8, c.y + 8, c.w - 16, c.h - 16);
-    // The exhibits inside: a vase, a crown, a relic, each a bright speck.
-    ctx.fillStyle = '#e8c96a';
-    ctx.beginPath();
-    ctx.arc(c.x + c.w * 0.3, c.y + c.h / 2, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#b8c4d0';
-    ctx.beginPath();
-    ctx.arc(c.x + c.w * 0.62, c.y + c.h / 2, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#c96a5a';
-    ctx.fillRect(c.x + c.w * 0.82 - 5, c.y + c.h / 2 - 10, 10, 20);
+  function drawConesAndBeams(state) {
+    for (let index = 0; index < state.guards.length; index += 1) {
+      const guard = state.guards[index];
+      const chasing = guard.mode === 'chase';
+      context.fillStyle = chasing ? 'rgba(255, 60, 60, 0.22)' : 'rgba(255, 180, 60, 0.15)';
+      context.beginPath();
+      context.moveTo(guard.x, guard.y);
+      context.arc(guard.x, guard.y, GUARD.coneRange, guard.dir - GUARD.coneHalf, guard.dir + GUARD.coneHalf);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = chasing ? 'rgba(255, 60, 60, 0.55)' : 'rgba(255, 180, 60, 0.45)';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(guard.x, guard.y);
+      context.lineTo(
+        guard.x + Math.cos(guard.dir - GUARD.coneHalf) * GUARD.coneRange,
+        guard.y + Math.sin(guard.dir - GUARD.coneHalf) * GUARD.coneRange,
+      );
+      context.moveTo(guard.x, guard.y);
+      context.lineTo(
+        guard.x + Math.cos(guard.dir + GUARD.coneHalf) * GUARD.coneRange,
+        guard.y + Math.sin(guard.dir + GUARD.coneHalf) * GUARD.coneRange,
+      );
+      context.stroke();
+    }
+    for (let index = 0; index < state.cameras.length; index += 1) {
+      const camera = state.cameras[index];
+      const tipX = camera.x + Math.cos(camera.angle) * CAMERA.beamLength;
+      const tipY = camera.y + Math.sin(camera.angle) * CAMERA.beamLength;
+      context.fillStyle = 'rgba(255, 46, 46, 0.10)';
+      context.beginPath();
+      context.moveTo(camera.x, camera.y);
+      context.arc(camera.x, camera.y, CAMERA.beamLength, camera.angle - CAMERA.beamHalf, camera.angle + CAMERA.beamHalf);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = 'rgba(255, 46, 46, 0.5)';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(camera.x, camera.y);
+      context.lineTo(tipX, tipY);
+      context.stroke();
+      // The camera body on the wall, with its red lens.
+      context.fillStyle = '#2a2f45';
+      context.fillRect(camera.x - 12, camera.y - 8, 24, 16);
+      context.fillStyle = PALETTE.beam;
+      context.beginPath();
+      context.arc(camera.x, camera.y + 8, 4, 0, Math.PI * 2);
+      context.fill();
+    }
   }
-}
 
-function drawStatues(ctx) {
-  for (const s of STATUES) {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.beginPath();
-    ctx.ellipse(s.x + 4, s.y + 6, s.r, s.r * 0.8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = PALETTE.statue;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#8b96a6';
-    ctx.beginPath();
-    ctx.arc(s.x - 6, s.y - 8, s.r * 0.45, 0, Math.PI * 2);
-    ctx.fill();
+  function drawSmokeAndCoins(state) {
+    for (let index = 0; index < state.smoke.length; index += 1) {
+      const cloud = state.smoke[index];
+      const gradient = context.createRadialGradient(cloud.x, cloud.y, 8, cloud.x, cloud.y, TOOLS.smokeRadius);
+      gradient.addColorStop(0, 'rgba(220, 220, 230, 0.42)');
+      gradient.addColorStop(1, 'rgba(220, 220, 230, 0)');
+      context.fillStyle = gradient;
+      context.beginPath();
+      context.arc(cloud.x, cloud.y, TOOLS.smokeRadius, 0, Math.PI * 2);
+      context.fill();
+    }
+    for (let index = 0; index < state.coins.length; index += 1) {
+      const coin = state.coins[index];
+      const progress = 1 - coin.t / TOOLS.coinPingSeconds;
+      context.strokeStyle = `rgba(255, 217, 122, ${0.75 * (1 - progress)})`;
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(coin.x, coin.y, 6 + progress * 46, 0, Math.PI * 2);
+      context.stroke();
+      context.fillStyle = PALETTE.goldBright;
+      context.beginPath();
+      context.arc(coin.x, coin.y, 5, 0, Math.PI * 2);
+      context.fill();
+    }
   }
-}
 
-function drawRopes(ctx) {
-  ctx.strokeStyle = PALETTE.rope;
-  ctx.lineWidth = 4;
-  for (const rope of ROPES) {
-    ctx.beginPath();
-    ctx.moveTo(rope.x1, rope.y1);
-    const mx = (rope.x1 + rope.x2) / 2;
-    const my = (rope.y1 + rope.y2) / 2 + 10;
-    ctx.quadraticCurveTo(mx, my, rope.x2, rope.y2);
-    ctx.stroke();
+  function drawGuards(state) {
+    for (let index = 0; index < state.guards.length; index += 1) {
+      const guard = state.guards[index];
+      context.fillStyle = PALETTE.guard;
+      context.beginPath();
+      context.arc(guard.x, guard.y, GUARD.radius, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = PALETTE.guardDark;
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(guard.x, guard.y, GUARD.radius, 0, Math.PI * 2);
+      context.stroke();
+      // A brim pointing where the guard looks.
+      context.strokeStyle = PALETTE.goldBright;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(guard.x + Math.cos(guard.dir) * 6, guard.y + Math.sin(guard.dir) * 6);
+      context.lineTo(guard.x + Math.cos(guard.dir) * (GUARD.radius + 4), guard.y + Math.sin(guard.dir) * (GUARD.radius + 4));
+      context.stroke();
+      if (guard.mode === 'investigate') text('?', guard.x, guard.y - GUARD.radius - 8, 26, PALETTE.goldBright, 'center', true);
+      if (guard.mode === 'chase') text('!', guard.x, guard.y - GUARD.radius - 8, 28, PALETTE.alarmHigh, 'center', true);
+      if (guard.suspicion > 0.05 && guard.mode !== 'chase') {
+        context.strokeStyle = 'rgba(255, 180, 60, 0.85)';
+        context.lineWidth = 3;
+        context.beginPath();
+        context.arc(guard.x, guard.y, GUARD.radius + 8, -Math.PI / 2, -Math.PI / 2 + guard.suspicion * Math.PI * 2);
+        context.stroke();
+      }
+    }
   }
-  ctx.fillStyle = PALETTE.ropePost;
-  const posts = [[615, 330], [715, 330], [615, 470], [715, 470]];
-  for (const [x, y] of posts) {
-    ctx.beginPath();
-    ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fill();
+
+  function drawThief(state) {
+    const thief = state.thief;
+    // A pool of warm light under the thief, so the dark figure always pops off the floor.
+    const pool = context.createRadialGradient(thief.x, thief.y, 4, thief.x, thief.y, 48);
+    pool.addColorStop(0, 'rgba(255, 217, 122, 0.30)');
+    pool.addColorStop(1, 'rgba(255, 217, 122, 0)');
+    context.fillStyle = pool;
+    context.beginPath();
+    context.arc(thief.x, thief.y, 48, 0, Math.PI * 2);
+    context.fill();
+    // Blink while invulnerable after being caught.
+    if (thief.invulnerable === 0 || Math.floor(thief.invulnerable * 10) % 2 === 1) {
+      context.fillStyle = PALETTE.thief;
+      context.beginPath();
+      context.arc(thief.x, thief.y, THIEF.radius, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = PALETTE.thiefRim;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.arc(thief.x, thief.y, THIEF.radius, 0, Math.PI * 2);
+      context.stroke();
+      context.strokeStyle = PALETTE.thiefRim;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(thief.x + Math.cos(thief.face) * 4, thief.y + Math.sin(thief.face) * 4);
+      context.lineTo(thief.x + Math.cos(thief.face) * (THIEF.radius + 5), thief.y + Math.sin(thief.face) * (THIEF.radius + 5));
+      context.stroke();
+    }
   }
-}
 
-function drawPedestalAndLoot(ctx, world) {
-  const cx = PEDESTAL.x + PEDESTAL.w / 2;
-  const cy = PEDESTAL.y + PEDESTAL.h / 2;
-  ctx.fillStyle = PALETTE.pedestal;
-  ctx.fillRect(PEDESTAL.x, PEDESTAL.y, PEDESTAL.w, PEDESTAL.h);
-  ctx.fillStyle = '#6b5a41';
-  ctx.fillRect(PEDESTAL.x - 4, PEDESTAL.y - 4, PEDESTAL.w + 8, 10);
-  if (!world.lootTaken) {
-    // The Star Sapphire, pulsing gold on its cushion.
-    const pulse = 0.75 + 0.25 * Math.sin(world.time * 3);
-    const glow = ctx.createRadialGradient(cx, cy - 8, 4, cx, cy - 8, 70 * pulse);
-    glow.addColorStop(0, 'rgba(255, 215, 94, 0.85)');
-    glow.addColorStop(1, 'rgba(255, 215, 94, 0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(cx, cy - 8, 70 * pulse, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.save();
-    ctx.translate(cx, cy - 8);
-    ctx.rotate(Math.PI / 4);
-    ctx.fillStyle = PALETTE.loot;
-    ctx.fillRect(-13, -13, 26, 26);
-    ctx.fillStyle = PALETTE.lootGlow;
-    ctx.fillRect(-7, -7, 14, 14);
-    ctx.restore();
-    ctx.fillStyle = PALETTE.loot;
-    ctx.font = LABEL_FONT;
-    ctx.textAlign = 'center';
-    ctx.fillText('★ STAR SAPPHIRE ★', cx, PEDESTAL.y + PEDESTAL.h + 18);
-  } else {
-    ctx.fillStyle = PALETTE.hudDim;
-    ctx.font = LABEL_FONT;
-    ctx.textAlign = 'center';
-    ctx.fillText('— EMPTY —', cx, PEDESTAL.y + PEDESTAL.h + 18);
+  function drawExit(state) {
+    const open = state.lootSecured;
+    context.fillStyle = open ? 'rgba(61, 220, 120, 0.25)' : 'rgba(138, 109, 59, 0.25)';
+    context.fillRect(EXIT.x, EXIT.y, EXIT.width, FIELD.height - EXIT.y);
+    text(
+      open ? 'EXIT · OPEN' : 'EXIT · LOCKED',
+      EXIT.x + EXIT.width / 2, EXIT.y - 10, 16,
+      open ? PALETTE.exit : PALETTE.exitLocked, 'center', true,
+    );
   }
-}
 
-function drawGuard(ctx, world, guard) {
-  // The vision cone first, under the body, so the room reads through it.
-  const coneColor = guard.state === 'chase' ? 'rgba(255, 84, 48, 0.38)' : 'rgba(255, 207, 63, 0.28)';
-  drawWedge(ctx, guard.x, guard.y, guard.angle, 235, 0.52, coneColor);
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-  ctx.beginPath();
-  ctx.ellipse(guard.x + 3, guard.y + 4, 15, 12, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = PALETTE.guardUniform;
-  ctx.beginPath();
-  ctx.arc(guard.x, guard.y, 15, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = PALETTE.guard;
-  ctx.beginPath();
-  ctx.arc(guard.x, guard.y, 10, 0, Math.PI * 2);
-  ctx.fill();
-  // The guard's facing: a pale helmet brim pointing where it looks.
-  ctx.fillStyle = '#e8e4d8';
-  ctx.beginPath();
-  ctx.arc(guard.x + Math.cos(guard.angle) * 10, guard.y + Math.sin(guard.angle) * 10, 4, 0, Math.PI * 2);
-  ctx.fill();
-  if (guard.state === 'chase') {
-    ctx.fillStyle = '#ff5440';
-    ctx.font = 'bold 26px Georgia, serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('!', guard.x, guard.y - 22);
-  } else if (guard.state === 'investigate') {
-    ctx.fillStyle = '#ffd75e';
-    ctx.font = 'bold 22px Georgia, serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('?', guard.x, guard.y - 22);
+  function drawHud(state) {
+    context.fillStyle = 'rgba(20, 24, 40, 0.92)';
+    context.fillRect(0, 0, FIELD.width, 64);
+    context.strokeStyle = PALETTE.gold;
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(0, 64);
+    context.lineTo(FIELD.width, 64);
+    context.stroke();
+    text('THE GILDED HOUR', 24, 30, 26, PALETTE.gold, 'left', true);
+    text('Meridian Museum · after hours', 24, 54, 14, PALETTE.muted, 'left');
+    // The alarm meter, centre: ten segments, green to amber to red.
+    const meterX = FIELD.width / 2 - 160;
+    const meterY = 20;
+    const meterW = 320;
+    const meterH = 22;
+    text('ALARM', meterX - 12, meterY + 17, 18, PALETTE.text, 'right', true);
+    context.fillStyle = '#0b0d16';
+    context.fillRect(meterX, meterY, meterW, meterH);
+    for (let segment = 0; segment < 10; segment += 1) {
+      const filled = state.alarm > segment * 10;
+      const color = state.alarm < 40 ? PALETTE.alarmLow : state.alarm < 70 ? PALETTE.alarmMid : PALETTE.alarmHigh;
+      context.fillStyle = filled ? color : '#2a2f45';
+      context.fillRect(meterX + 2 + segment * ((meterW - 4) / 10), meterY + 2, (meterW - 4) / 10 - 3, meterH - 4);
+    }
+    context.strokeStyle = PALETTE.panelEdge;
+    context.lineWidth = 2;
+    context.strokeRect(meterX, meterY, meterW, meterH);
+    text(`${Math.round(state.alarm)}%`, meterX + meterW + 12, meterY + 17, 18, PALETTE.text, 'left', true);
+    // Right: loot, tools, lives, time, score.
+    const right = FIELD.width - 24;
+    text(
+      state.lootSecured ? 'WATCH · SECURED' : 'WATCH · AT LARGE',
+      right, 30, 18, state.lootSecured ? PALETTE.exit : PALETTE.goldBright, 'right', true,
+    );
+    text(
+      `${scoreLabel(state.score)}   SMOKE ×${state.smokeCharges}   COIN ×${state.coinCharges}   ${timeLabel(formatTime(state.time))}`,
+      right, 54, 14, PALETTE.muted, 'right',
+    );
+    // Lives sit beside the subtitle, clear of every other label.
+    text('LIVES', 258, 54, 14, PALETTE.muted, 'left');
+    for (let life = 0; life < LIVES; life += 1) {
+      const lx = 310 + life * 24;
+      const ly = 47;
+      context.fillStyle = life < state.lives ? PALETTE.goldBright : '#2a2f45';
+      context.beginPath();
+      context.moveTo(lx, ly - 7);
+      context.lineTo(lx + 7, ly);
+      context.lineTo(lx, ly + 7);
+      context.lineTo(lx - 7, ly);
+      context.closePath();
+      context.fill();
+    }
+    // A red pulse at the edges while the alarm runs hot.
+    if (state.alarm >= 70) {
+      const pulse = 0.10 + 0.08 * Math.sin(state.elapsed * 5);
+      context.strokeStyle = `rgba(255, 71, 71, ${pulse})`;
+      context.lineWidth = 10;
+      context.strokeRect(5, 5, FIELD.width - 10, FIELD.height - 10);
+    }
+    text('WASD / arrows — move · Shift — sprint (noisy) · Q — coin · E — smoke · P — pause', 24, FIELD.height - 12, 13, PALETTE.muted, 'left');
   }
-}
 
-function drawCamera(ctx, world, camera) {
-  const beamColor = world.spottedNow && world.seenBy === 'camera'
-    ? 'rgba(255, 60, 60, 0.32)' : 'rgba(255, 90, 90, 0.20)';
-  drawWedge(ctx, camera.x, camera.y, camera.angle, 265, 0.30, beamColor);
-  ctx.fillStyle = PALETTE.camera;
-  ctx.beginPath();
-  ctx.arc(camera.x, camera.y, 9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#e5484d';
-  ctx.beginPath();
-  ctx.arc(camera.x + Math.cos(camera.angle) * 5, camera.y + Math.sin(camera.angle) * 5, 4, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawPlayer(ctx, world) {
-  const p = world.player;
-  // A soft pool of lamplight under the thief: the figure must read at a
-  // glance against the dark floor, so the glow comes before the body.
-  const glow = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, 42);
-  glow.addColorStop(0, 'rgba(245, 197, 66, 0.32)');
-  glow.addColorStop(1, 'rgba(245, 197, 66, 0)');
-  ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, 42, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-  ctx.beginPath();
-  ctx.ellipse(p.x + 3, p.y + 4, 14, 11, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // The coat is light slate with a bright gold rim now — the old dark navy
-  // vanished into the floor and the thief was unreadable in screenshots.
-  ctx.fillStyle = '#3a4a6b';
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#f5c542';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  ctx.fillStyle = PALETTE.player;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
-  ctx.fill();
-  // The mask: a dark band across the face, pointing where the thief heads.
-  ctx.fillStyle = '#1f2430';
-  ctx.beginPath();
-  ctx.arc(p.x + Math.cos(p.dir) * 4, p.y + Math.sin(p.dir) * 4, 6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = PALETTE.player;
-  ctx.beginPath();
-  ctx.arc(p.x + Math.cos(p.dir) * 8, p.y + Math.sin(p.dir) * 8, 3, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawSmoke(ctx, world) {
-  for (const smoke of world.smokes) {
-    const alpha = Math.min(0.55, 0.25 + (smoke.left / 4.5) * 0.3);
-    ctx.fillStyle = `rgba(200, 205, 215, ${alpha})`;
-    ctx.beginPath();
-    ctx.arc(smoke.x, smoke.y, smoke.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = `rgba(220, 225, 235, ${alpha * 0.8})`;
-    ctx.beginPath();
-    ctx.arc(smoke.x - smoke.r * 0.3, smoke.y - smoke.r * 0.2, smoke.r * 0.55, 0, Math.PI * 2);
-    ctx.fill();
+  function drawPanel(title, lines, prompt, accent) {
+    const width = 640;
+    const height = 150 + lines.length * 34;
+    const x = (FIELD.width - width) / 2;
+    const y = (FIELD.height - height) / 2;
+    context.fillStyle = 'rgba(11, 13, 22, 0.82)';
+    context.fillRect(0, 0, FIELD.width, FIELD.height);
+    context.fillStyle = PALETTE.panel;
+    context.fillRect(x, y, width, height);
+    context.strokeStyle = accent || PALETTE.gold;
+    context.lineWidth = 3;
+    context.strokeRect(x, y, width, height);
+    context.textBaseline = 'alphabetic';
+    text(title, FIELD.width / 2, y + 72, 44, PALETTE.text, 'center', true);
+    for (let index = 0; index < lines.length; index += 1) {
+      text(lines[index], FIELD.width / 2, y + 118 + index * 34, 20, PALETTE.muted, 'center');
+    }
+    text(prompt, FIELD.width / 2, y + height - 36, 22, PALETTE.goldBright, 'center');
   }
-}
 
-function drawCoins(ctx, world) {
-  for (const coin of world.coins) {
-    ctx.strokeStyle = 'rgba(255, 215, 94, 0.8)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(coin.x, coin.y, 18 + Math.sin(world.time * 6) * 3, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = PALETTE.coin;
-    ctx.beginPath();
-    ctx.arc(coin.x, coin.y, 7, 0, Math.PI * 2);
-    ctx.fill();
+  const TITLE_LINES = [
+    'Steal the golden watch from the Meridian Museum.',
+    'Read the cones. Mind the cameras. Slip out unseen.',
+    'Three routes in. Smoke and coins at a cost. One way out.',
+    '',
+  ];
+  const PAUSED_LINES = ['The guards will wait for you.'];
+  const CAUGHT_LINES = ['', ''];
+  const ESCAPED_LINES = ['', ''];
+
+  /** Paint one frame: the hall, then the HUD or a panel for the screen the game is on. */
+  function draw(state, screen, best) {
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.fillStyle = PALETTE.backdrop;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
+    drawFloor();
+    drawConesAndBeams(state);
+    drawCover();
+    drawPedestal(state);
+    drawExit(state);
+    drawSmokeAndCoins(state);
+    drawGuards(state);
+    drawThief(state);
+    if (screen === SCREEN_TITLE) {
+      TITLE_LINES[3] = bestLabel(best);
+      drawPanel('THE GILDED HOUR', TITLE_LINES, 'Press Space or click to begin');
+      return;
+    }
+    drawHud(state);
+    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
+    else if (screen === SCREEN_OVER) {
+      if (state.escaped) {
+        ESCAPED_LINES[0] = finalLabel(state.score);
+        ESCAPED_LINES[1] = bestLabel(best);
+        drawPanel('CLEAN GETAWAY', ESCAPED_LINES, 'Press Space or click to run it again', PALETTE.exit);
+      } else {
+        CAUGHT_LINES[0] = finalLabel(state.score);
+        CAUGHT_LINES[1] = bestLabel(best);
+        drawPanel('CAUGHT!', CAUGHT_LINES, 'Press Space or click to try again', PALETTE.alarmHigh);
+      }
+    }
   }
-}
 
-function alarmColor(alarm) {
-  if (alarm < 40) return PALETTE.alarmLow;
-  if (alarm < 70) return PALETTE.alarmMid;
-  return PALETTE.alarmHigh;
-}
-
-function drawHud(ctx, world) {
-  ctx.fillStyle = PALETTE.hud;
-  ctx.fillRect(0, 0, VIEW.width, 58);
-  ctx.fillStyle = 'rgba(201, 162, 39, 0.6)';
-  ctx.fillRect(0, 58, VIEW.width, 2);
-
-  // Title, left.
-  ctx.fillStyle = PALETTE.loot;
-  ctx.font = 'bold 20px Georgia, serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('THE MERIDIAN VAULT', 16, 26);
-  ctx.fillStyle = PALETTE.hudDim;
-  ctx.font = HUD_SMALL_FONT;
-  const objective = world.lootTaken
-    ? 'Sapphire secured — reach the EXIT, bottom centre!'
-    : 'Cross the gallery — take the STAR SAPPHIRE, then escape.';
-  ctx.fillText(objective, 16, 46);
-
-  // The alarm meter, centre: wide, labelled, impossible to miss.
-  const meterX = 470;
-  const meterW = 340;
-  ctx.fillStyle = world.alarmTripped ? '#ff5440' : PALETTE.hudText;
-  ctx.font = 'bold 15px "Courier New", monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(world.alarmTripped ? '⚠ ALARM!' : 'ALARM', meterX, 26);
-  ctx.fillStyle = '#1a2233';
-  roundRect(ctx, meterX + 78, 12, meterW, 18, 4);
-  ctx.fill();
-  ctx.fillStyle = alarmColor(world.alarm);
-  const fillW = Math.max(0, (meterW * world.alarm) / 100);
-  if (fillW > 0) {
-    roundRect(ctx, meterX + 78, 12, fillW, 18, 4);
-    ctx.fill();
-  }
-  ctx.strokeStyle = PALETTE.hudDim;
-  ctx.lineWidth = 1;
-  roundRect(ctx, meterX + 78, 12, meterW, 18, 4);
-  ctx.stroke();
-  ctx.fillStyle = PALETTE.hudText;
-  ctx.font = HUD_SMALL_FONT;
-  ctx.fillText(`${Math.round(world.alarm)}%`, meterX + 78 + meterW + 10, 26);
-  ctx.fillStyle = PALETTE.hudDim;
-  ctx.fillText(world.lootTaken ? '◆ SAPPHIRE: SECURED' : '◆ SAPPHIRE: AT LARGE', meterX, 46);
-
-  // Tools and time, right.
-  ctx.textAlign = 'right';
-  ctx.fillStyle = PALETTE.hudText;
-  ctx.font = HUD_FONT;
-  ctx.fillText(`◐ SMOKE ×${world.player.smokes}   ◎ COIN ×${world.player.coins}`, VIEW.width - 16, 26);
-  const minutes = Math.floor(world.time / 60);
-  const seconds = Math.floor(world.time % 60).toString().padStart(2, '0');
-  ctx.fillStyle = PALETTE.hudDim;
-  ctx.font = HUD_SMALL_FONT;
-  ctx.fillText(`TIME ${minutes}:${seconds}   ·   WASD move · SHIFT sprint · E smoke · Q coin`, VIEW.width - 16, 46);
-}
-
-function drawTitleScreen(ctx) {
-  ctx.fillStyle = 'rgba(10, 13, 20, 0.82)';
-  ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-  ctx.fillStyle = PALETTE.loot;
-  ctx.font = TITLE_FONT;
-  ctx.textAlign = 'center';
-  ctx.fillText('THE MERIDIAN VAULT', VIEW.width / 2, 300);
-  ctx.fillStyle = PALETTE.hudText;
-  ctx.font = SUBTITLE_FONT;
-  ctx.fillText('A night heist in one room — cross the gallery, take the Star Sapphire, get out.', VIEW.width / 2, 350);
-  ctx.fillStyle = PALETTE.hudDim;
-  ctx.font = HUD_FONT;
-  ctx.fillText('Dodge the guards’ vision cones. Slip past the sweeping cameras.', VIEW.width / 2, 410);
-  ctx.fillText('Smoke hides you. A tossed coin pulls a guard away. Sprinting is loud.', VIEW.width / 2, 438);
-  ctx.fillText('Grab the sapphire — the alarm jumps — then reach the EXIT.', VIEW.width / 2, 466);
-  ctx.fillStyle = PALETTE.loot;
-  ctx.font = 'bold 20px Georgia, serif';
-  ctx.fillText('— Press ENTER or click to begin —', VIEW.width / 2, 540);
-}
-
-function drawEndScreen(ctx, world, won) {
-  ctx.fillStyle = won ? 'rgba(20, 40, 20, 0.78)' : 'rgba(60, 12, 10, 0.82)';
-  ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-  const r = world.result || { time: 0, detections: 0, smokesLeft: 0, coinsLeft: 0 };
-  ctx.textAlign = 'center';
-  ctx.fillStyle = won ? PALETTE.exitGlow : '#ff6b5e';
-  ctx.font = TITLE_FONT;
-  ctx.fillText(won ? 'CLEAN GETAWAY!' : 'CAUGHT!', VIEW.width / 2, 300);
-  ctx.fillStyle = PALETTE.hudText;
-  ctx.font = SUBTITLE_FONT;
-  ctx.fillText(
-    won
-      ? 'The Star Sapphire is yours. The Meridian never saw you leave.'
-      : 'A guard closed the distance. The Meridian keeps its sapphire — this time.',
-    VIEW.width / 2, 350,
-  );
-  ctx.fillStyle = PALETTE.hudDim;
-  ctx.font = HUD_FONT;
-  const minutes = Math.floor(r.time / 60);
-  const seconds = Math.floor(r.time % 60).toString().padStart(2, '0');
-  ctx.fillText(`TIME ${minutes}:${seconds}   ·   SPOTTED ${r.detections}×   ·   SMOKE LEFT ${r.smokesLeft}   ·   COINS LEFT ${r.coinsLeft}`, VIEW.width / 2, 420);
-  ctx.fillStyle = PALETTE.loot;
-  ctx.font = 'bold 20px Georgia, serif';
-  ctx.fillText('— Press ENTER or click to play again —', VIEW.width / 2, 500);
-}
-
-// Draw one frame of the game: the room, everything in it, the HUD, and any
-// screen overlay. `screen` is 'title' | 'play' | 'caught' | 'escaped'.
-export function drawGame(ctx, world, screen) {
-  ctx.clearRect(0, 0, VIEW.width, VIEW.height);
-  drawFloor(ctx);
-  drawRopes(ctx);
-  drawPedestalAndLoot(ctx, world);
-  drawCases(ctx);
-  drawStatues(ctx);
-  drawWalls(ctx, world);
-  drawSmoke(ctx, world);
-  for (const camera of world.cameras) drawCamera(ctx, world, camera);
-  for (const guard of world.guards) drawGuard(ctx, world, guard);
-  drawCoins(ctx, world);
-  drawPlayer(ctx, world);
-  drawHud(ctx, world);
-  if (screen === 'title') drawTitleScreen(ctx);
-  if (screen === 'caught') drawEndScreen(ctx, world, false);
-  if (screen === 'escaped') drawEndScreen(ctx, world, true);
+  resize();
+  window.addEventListener('resize', resize);
+  return { draw };
 }

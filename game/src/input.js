@@ -1,51 +1,79 @@
-// The Meridian Vault — keyboard and mouse input, held keys plus the
-// edge-triggered tool presses the step function consumes in one frame.
-export function createInput() {
+// Keyboard and pointer input. Held keys give a steering direction (eight ways); one-shot
+// presses (start or restart, pause, toss a coin, throw smoke) are queued as bit flags and
+// taken once by the loop, so a press between two frames is never lost and never counted twice.
+
+export const ACTION_CONFIRM = 1;
+export const ACTION_PAUSE = 2;
+export const ACTION_COIN = 4;
+export const ACTION_SMOKE = 8;
+
+const UP = new Set(['ArrowUp', 'KeyW']);
+const DOWN = new Set(['ArrowDown', 'KeyS']);
+const LEFT = new Set(['ArrowLeft', 'KeyA']);
+const RIGHT = new Set(['ArrowRight', 'KeyD']);
+const SPRINT = new Set(['ShiftLeft', 'ShiftRight']);
+const CONFIRM = new Set(['Space', 'Enter']);
+const PAUSE = new Set(['KeyP', 'Escape']);
+const COIN = new Set(['KeyQ']);
+const SMOKE = new Set(['KeyE']);
+
+export function createInput(target) {
+  let up = false;
+  let down = false;
+  let left = false;
+  let right = false;
+  let sprint = false;
+  let actions = 0;
+
+  window.addEventListener('keydown', (event) => {
+    if (UP.has(event.code)) up = true;
+    else if (DOWN.has(event.code)) down = true;
+    else if (LEFT.has(event.code)) left = true;
+    else if (RIGHT.has(event.code)) right = true;
+    else if (SPRINT.has(event.code)) sprint = true;
+    else if (CONFIRM.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_CONFIRM;
+    } else if (PAUSE.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_PAUSE;
+    } else if (COIN.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_COIN;
+    } else if (SMOKE.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_SMOKE;
+    } else return;
+    event.preventDefault();
+  });
+  window.addEventListener('keyup', (event) => {
+    if (UP.has(event.code)) up = false;
+    else if (DOWN.has(event.code)) down = false;
+    else if (LEFT.has(event.code)) left = false;
+    else if (RIGHT.has(event.code)) right = false;
+    else if (SPRINT.has(event.code)) sprint = false;
+  });
+  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
+  window.addEventListener('blur', () => {
+    up = false;
+    down = false;
+    left = false;
+    right = false;
+    sprint = false;
+  });
+  target.addEventListener('pointerdown', () => {
+    actions |= ACTION_CONFIRM;
+  });
+
   return {
-    up: false, down: false, left: false, right: false,
-    sprint: false,
-    useSmoke: false, // true only on the frame E is pressed
-    throwCoin: false, // true only on the frame Q is pressed
-    confirm: false, // Enter / Space on a menu screen
+    /** The steering vector, each component -1, 0 or 1. */
+    direction() {
+      return { x: (right ? 1 : 0) - (left ? 1 : 0), y: (down ? 1 : 0) - (up ? 1 : 0) };
+    },
+    sprinting() {
+      return sprint;
+    },
+    /** The one-shot presses since the last call, as ACTION_* flags. */
+    takeActions() {
+      const taken = actions;
+      actions = 0;
+      return taken;
+    },
   };
-}
-
-const KEYMAP = {
-  ArrowUp: 'up', KeyW: 'up',
-  ArrowDown: 'down', KeyS: 'down',
-  ArrowLeft: 'left', KeyA: 'left',
-  ArrowRight: 'right', KeyD: 'right',
-  ShiftLeft: 'sprint', ShiftRight: 'sprint',
-  Enter: 'confirm',
-};
-
-export function attachInput(input, target) {
-  target.addEventListener('keydown', (event) => {
-    const name = KEYMAP[event.code];
-    if (name) {
-      input[name] = true;
-      event.preventDefault();
-    }
-    if (event.code === 'KeyE' && !event.repeat) input.useSmoke = true;
-    if (event.code === 'KeyQ' && !event.repeat) input.throwCoin = true;
-    if (event.code === 'Space' && !event.repeat) input.confirm = true;
-  });
-  target.addEventListener('keyup', (event) => {
-    const name = KEYMAP[event.code];
-    if (name) input[name] = false;
-  });
-  target.addEventListener('blur', () => {
-    input.up = input.down = input.left = input.right = input.sprint = false;
-  });
-  // Mouse: clicking the canvas confirms on a menu screen, like Enter.
-  target.addEventListener('mousedown', () => {
-    input.confirm = true;
-  });
-}
-
-// Clear the one-frame presses after the step has consumed them.
-export function clearPresses(input) {
-  input.useSmoke = false;
-  input.throwCoin = false;
-  input.confirm = false;
 }

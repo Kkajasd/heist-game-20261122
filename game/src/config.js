@@ -1,90 +1,161 @@
-// The Meridian Vault — configuration: one place for every number the game tunes.
-// All sizes are in canvas pixels; the view is a fixed 1280 x 860 top-down gallery.
-export const VIEW = { width: 1280, height: 860 };
+// Every tuning number, colour and piece of the room in one place. The playfield is a fixed
+// 1280x860 logical area; the renderer scales it to the window, so no rule below depends on
+// the screen size. The Meridian Museum after hours: one grand gallery, a red carpet runner
+// down the middle, glass cases and statues for cover, and the golden pocket watch
+// "The Gilded Hour" on its pedestal at the centre.
 
-// Palette: a night museum — deep blue marble, brass, velvet red, gold loot.
-export const PALETTE = {
-  floor: '#232a38',
-  floorTile: '#28303f',
-  floorTileDark: '#202634',
-  wall: '#141a26',
-  wallTop: '#2c3850',
-  caseGlass: '#3d5a74',
-  caseFrame: '#8a6d3b',
-  caseTop: '#54708c',
-  statue: '#6b7686',
-  rope: '#a33327',
-  ropePost: '#c9a227',
-  loot: '#ffd75e',
-  lootGlow: '#ffedb0',
-  pedestal: '#4a4033',
-  exit: '#2e7d4f',
-  exitGlow: '#7be495',
-  player: '#e8e4d8',
-  playerCoat: '#1f2430',
-  guard: '#c0392b',
-  guardUniform: '#7a1f16',
-  cone: 'rgba(255, 207, 63, 0.28)',
-  coneAlert: 'rgba(255, 84, 48, 0.38)',
-  camera: '#b8c4d0',
-  beam: 'rgba(255, 90, 90, 0.20)',
-  beamAlert: 'rgba(255, 60, 60, 0.32)',
-  smoke: 'rgba(200, 205, 215, 0.55)',
-  coin: '#ffd75e',
-  hud: '#0d1117',
-  hudText: '#e8e4d8',
-  hudDim: '#9aa5b5',
-  alarmLow: '#58b368',
-  alarmMid: '#e0a83c',
-  alarmHigh: '#e5484d',
-};
+export const FIELD = { width: 1280, height: 860 };
 
-// Movement and timing, in seconds and pixels.
-export const PLAYER = {
+/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+export const STEP = 1 / 60;
+
+export const WALL = 28;
+
+export const THIEF = {
   radius: 14,
-  walkSpeed: 210,
-  sprintSpeed: 315,
-  sprintNoise: 120,
+  walk: 215,
+  sprint: 330,
+  invulnerable: 2,
 };
 
-// A guard walks its waypoints, pauses, turns, and sweeps its cone while it waits.
+export const LIVES = 3;
+
 export const GUARD = {
   radius: 15,
-  patrolSpeed: 78,
-  chaseSpeed: 165,
-  investigateSpeed: 120,
-  coneRange: 235,
-  coneHalfAngle: 0.52, // ~60 degrees total
-  sightRate: 42, // alarm points per second while a guard sees the thief
-  touchRadius: 26, // closer than this and the thief is caught
-  pauseSeconds: 1.4,
-  turnSpeed: 1.9,
+  patrol: 72,
+  investigate: 115,
+  chase: 155,
+  coneRange: 205,
+  /** Half-angle of a guard's vision cone, in radians. */
+  coneHalf: 0.55,
+  pause: 0.9,
+  /** Suspicion per second while the thief is inside a cone with a clear line of sight. */
+  suspicionUp: 1.6,
+  suspicionDown: 0.8,
+  chaseSeconds: 4,
 };
 
 export const CAMERA = {
-  beamRange: 265,
-  beamHalfAngle: 0.30,
-  sweepSpeed: 0.55, // radians per second
-  sightRate: 26, // alarm points per second inside a beam
+  beamLength: 540,
+  /** Half-angle of a camera beam, in radians. */
+  beamHalf: 0.14,
+  sweep: 0.84,
+  sweepSpeed: 0.45,
 };
 
 export const ALARM = {
-  decayRate: 13, // points per second while unseen
-  tripAt: 100,
-  tripSeconds: 6, // how long the alarm state lasts once tripped
-  afterTrip: 55, // alarm level when the trip ends
-  lootGrabBoost: 25, // alarm jump when the sapphire is taken
+  beamPerSecond: 13,
+  conePerSecond: 30,
+  chasePerSecond: 8,
+  sprintPerSecond: 4,
+  decayPerSecond: 4,
+  lockdown: 100,
 };
 
 export const TOOLS = {
-  smokeCount: 3,
+  smokeCharges: 2,
   smokeRadius: 95,
   smokeSeconds: 4.5,
-  coinCount: 3,
-  coinLureRadius: 260,
-  coinInvestigateSeconds: 5,
+  coinCharges: 3,
+  coinThrow: 190,
+  coinPingSeconds: 0.9,
+  investigateSeconds: 3.5,
 };
 
-// Fixed-step simulation: the world advances in 1/60 s steps, so a staged
-// screenshot is the same frame every time it is taken.
-export const STEP = 1 / 60;
+export const LOOT = { points: 500, grabRadius: 52 };
+export const TIME_BONUS = { parSeconds: 240, perSecond: 5 };
+export const CALM_BONUS = { perAlarmPoint: 2 };
+
+/** The pedestal at the centre of the hall. Blocks movement, not sight (it is waist-high). */
+export const PEDESTAL = { x: 640, y: 360, radius: 34 };
+
+/** The door the thief came in through, bottom centre. The way out once the loot is secured. */
+export const EXIT = { x: 600, y: 828, width: 80, height: 32 };
+
+/** The red carpet runner down the middle of the hall: the fast route, and the exposed one. */
+export const CARPET = { x: 600, y: 120, width: 80, height: 680 };
+
+/** Cover that blocks both movement and line of sight: glass display cases and marble columns. */
+export const COVER_RECTS = [
+  { x: 170, y: 300, width: 250, height: 44 }, // west display case
+  { x: 860, y: 300, width: 250, height: 44 }, // east display case
+  { x: 210, y: 170, width: 34, height: 34 }, // north-west column
+  { x: 1036, y: 170, width: 34, height: 34 }, // north-east column
+  { x: 210, y: 656, width: 34, height: 34 }, // south-west column
+  { x: 1036, y: 656, width: 34, height: 34 }, // south-east column
+];
+
+/** Round cover (bronze statues) that blocks movement and line of sight. */
+export const COVER_CIRCLES = [
+  { x: 300, y: 560, radius: 26 },
+  { x: 980, y: 560, radius: 26 },
+  { x: 640, y: 640, radius: 26 }, // the centre statue, standing on the carpet
+];
+
+/** Guard patrols: each guard walks its waypoints in order, pausing at each one. The routes are
+ * drawn clear of the cases, columns and statues, so a patrol never has to push through cover. */
+export const GUARD_PATROLS = [
+  [
+    { x: 140, y: 230 },
+    { x: 500, y: 230 },
+    { x: 500, y: 540 },
+    { x: 140, y: 540 },
+  ],
+  [
+    { x: 780, y: 230 },
+    { x: 1140, y: 230 },
+    { x: 1140, y: 540 },
+    { x: 780, y: 540 },
+  ],
+  [
+    { x: 700, y: 180 },
+    { x: 700, y: 560 },
+  ],
+];
+
+/** Wall cameras on the north wall, sweeping their red beams down across the hall. */
+export const CAMERAS = [
+  { x: 180, y: 34, base: Math.PI / 2, phase: 0 },
+  { x: 640, y: 34, base: Math.PI / 2, phase: 1.9 },
+  { x: 1100, y: 34, base: Math.PI / 2, phase: 3.8 },
+];
+
+/** Where the thief starts: just inside the door, bottom centre. */
+export const START = { x: 640, y: 790 };
+
+export const PALETTE = {
+  backdrop: '#0b0d16',
+  floor: '#171a2b',
+  floorDark: '#12152a',
+  slab: '#1e2338',
+  gold: '#e8b64c',
+  goldBright: '#ffd97a',
+  carpet: '#6e1423',
+  carpetEdge: '#c9a227',
+  marble: '#d8d3c8',
+  marbleDark: '#8f8a7d',
+  caseGlass: '#1d3a44',
+  caseRim: '#7fb3c8',
+  statue: '#5a4632',
+  statueHi: '#a8875e',
+  thief: '#1c2436',
+  thiefRim: '#ffd97a',
+  guard: '#7a1f2b',
+  guardDark: '#4d1220',
+  cone: '#ffb43c',
+  beam: '#ff2e2e',
+  alarmLow: '#58c96b',
+  alarmMid: '#e8b64c',
+  alarmHigh: '#ff4747',
+  panel: '#141828',
+  panelEdge: '#3a4060',
+  text: '#f2efe6',
+  muted: '#9aa0b8',
+  exit: '#3ddc78',
+  exitLocked: '#8a6d3b',
+};
+
+export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+
+/** Where the best score is kept between visits (this browser only). */
+export const BEST_KEY = 'gilded-hour.best';
