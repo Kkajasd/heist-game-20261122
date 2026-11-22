@@ -1,13 +1,8 @@
-// The Velvet Vault — hand-in program (Node 22, standard library only).
-// It copies this repository's game/ and screenshots/ to /output and writes
-// /output/dossier.json with the vendored make.fun library, exactly as the
-// starter does. Outside the grader, MAKEFUN_OUTPUT_DIR stands in for
-// /output:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-//
-// The grader mounts /output as a bind mount, so this program never deletes
-// the output directory itself: it only clears what is inside it, then writes
-// fresh. Two runs write the same bytes.
-
+// The Meridian Vault — the hand-in program (Node 22, standard library only).
+// It copies the game and its screenshots into the grader's output directory
+// and writes the dossier the judge reads, using the kit's vendored library.
+// The output directory itself is a mount the grader owns, so this clears only
+// what is inside it and never removes the directory itself.
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,9 +11,8 @@ import { buildDossier } from './vendor/makefun-game.ts';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
+// Clear the contents of the output directory, never the directory itself.
 mkdirSync(out, { recursive: true });
-
-// Clear the contents of /output without removing /output itself.
 for (const entry of readdirSync(out)) {
   rmSync(join(out, entry), { recursive: true, force: true });
 }
@@ -29,10 +23,8 @@ if (existsSync(join(here, 'screenshots'))) {
   cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 }
 
-// The scorer's own caps: only text_max_bytes shapes the bytes; the others
-// refuse an entry the scorer would refuse (more than 4 screenshots or one
-// over 256 KiB; more than 993 files in game/ or 48 MiB of game files in all,
-// or a path under game/ over 1000 bytes).
+// The caps match the sealed gate's own: at most 4 screenshots of 256 KiB, a
+// game of at most 993 files and 48 MiB, and a dossier text of 160 KiB.
 writeFileSync(
   join(out, 'dossier.json'),
   buildDossier(out, {

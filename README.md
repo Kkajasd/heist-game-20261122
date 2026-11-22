@@ -1,68 +1,41 @@
-# The Velvet Vault
+# The Meridian Vault
 
-[![make.fun](https://make.fun/badge/best-heist-game-20261122-0559.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=referral&utm_campaign=competition)
-[![make.fun rank](https://make.fun/badge/best-heist-game-20261122-0559/Kkajasd/heist-game-20261122/rank.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=referral&utm_campaign=competition)
-[![make.fun reward](https://make.fun/badge/best-heist-game-20261122-0559/Kkajasd/heist-game-20261122/reward.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=referral&utm_campaign=competition)
+[![best-heist-game-20261122-0559](https://make.fun/badge/best-heist-game-20261122-0559.svg)](https://make.fun/c/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=makefun)
+[![rank](https://make.fun/badge/best-heist-game-20261122-0559/Kkajasd/heist-game-20261122/rank.svg)](https://make.fun/c/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=makefun)
+[![reward](https://make.fun/badge/best-heist-game-20261122-0559/Kkajasd/heist-game-20261122/reward.svg)](https://make.fun/c/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=makefun)
 
-A top-down 2D heist game for the make.fun **best-heist-game-20261122-0559**
-bounty. You are the thief in a velvet-draped museum after dark: slip past
-patrolling guards and sweeping security cameras, grab every gold coin and
-diamond, and reach the exit before the alarm meter hits 100%.
+A night heist in one room. Cross the Meridian gallery, dodge the guards'
+vision cones and the sweeping cameras, take the Star Sapphire from its
+pedestal, and reach the exit before the alarm catches you.
 
-## How to play
+- **Three routes** through the gallery: the left hall (patrols), the centre
+  (cameras over the pedestal), the right gallery (patrols + camera).
+- **Tools at a cost:** smoke pellets hide you from every watcher; a tossed
+  coin pulls a nearby guard off its patrol. Sprinting is fast — and loud.
+- **The alarm meter** rises while any watcher sees you and falls while you
+  stay hidden. At 100% every guard converges on you.
+- **The getaway:** taking the sapphire jumps the alarm and opens the exit.
+  Reach the door to escape.
 
-- **Move:** WASD or arrow keys, or click anywhere to walk there.
-- **Sneak:** hold Shift — slower, but the alarm rises half as fast.
-- **Distract:** press E or right-click to throw a pebble. Guards nearby go
-  to check the noise. You carry 3 pebbles per vault (4 in the last one).
-- **Loot:** touch gold coins (+100) and diamonds (+250). The exit unlocks
-  only when every loot in the vault is taken.
-- **Alarm meter:** the gauge up top rises while a guard or a camera can see
-  you, and falls while you stay hidden. Past 55% the nearest guard comes to
-  investigate. At 100% you are caught: you lose a life and restart the vault
-  with the meter at 40%. Lose all 3 lives and the crew is busted.
-- **Win:** empty all three vaults — the Gallery, the Gilded Hall and the
-  Crown Vault — and slip out clean for the getaway bonus.
-- **Keys:** P pause, M mute, R restart, Enter/click confirms on menus.
+## Play
 
-Guards patrol fixed loops and pause at corners to look around. Cameras are
-mounted on the walls and sweep their red cones back and forth — time the
-sweep. Walls and crates block sight, so a cone you cannot see through is a
-cone you can hide behind.
+Open `game/index.html` in a desktop browser (no network, no build step) or
+serve `game/` with any static server.
 
-## Run it
+- **WASD / arrows** — move
+- **Shift** — sprint (loud)
+- **E** — smoke pellet
+- **Q** — throw a coin
+- **Enter / click** — start, play again
 
-```sh
-node serve.ts        # serves game/ at http://localhost:8080
-```
+## Shots
 
-Open the page in desktop Chrome and play. No build step, no network
-requests: every file the game loads lives under `game/`, and the sound is
-synthesized with WebAudio.
+The screenshots in `screenshots/` are deterministic renders of the game's own
+code: `?shot=cover`, `?shot=tension` and `?shot=escape` play the real rules
+forward from a fresh world to a staged frame.
 
-## Hand in
+## Entry
 
-```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-```
-
-`main.ts` (Node 22, standard library only) copies `game/` and
-`screenshots/` to the output directory and writes `dossier.json` with the
-vendored `vendor/makefun-game.ts`. Screenshots are staged renders of the
-game's own code — see `shots.json` for the `?shot=` queries used
-(`play` is the cover: thief, guard cone, camera cone, loot and alarm meter
-in one frame).
-
-## Layout
-
-- `game/index.html` — the page, one canvas.
-- `game/src/main.js` — game loop, state machine, alarm rules.
-- `game/src/levels.js` — the three vaults: maps, patrols, cameras.
-- `game/src/guards.js` — patrol, investigate and pursue behaviour.
-- `game/src/cameras.js` — sweeping camera cones and their sight check.
-- `game/src/render.js` — canvas drawing: floor, cones, HUD, alarm meter.
-- `game/src/input.js` — keyboard and mouse.
-- `game/src/audio.js` — WebAudio bleeps and the alarm hum.
-- `game/src/shots.js` — deterministic `?shot=` staging for screenshots.
-- `game/src/random.js` — seeded RNG and small math helpers.
-- `main.ts` — the hand-in program. `serve.ts` — local static server.
+`main.ts` (Node 22, standard library only) copies `game/` and `screenshots/`
+to `/output` and writes `/output/dossier.json` with `buildDossier` from
+`vendor/makefun-game.ts`.
